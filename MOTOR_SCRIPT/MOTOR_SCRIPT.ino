@@ -21,6 +21,15 @@ MPU6050 mpu;
 int switch_13 = 5;
 int switch_24 = 6;
 
+#define MAX_VOLTAGE 12    // DC Motor max voltage allowed
+
+
+
+// Reference angle
+#define thetaX_ref 0
+#define thetaY_ref 0
+
+#define deg2rad 0.0175
 
 #define OUTPUT_READABLE_YAWPITCHROLL
 
@@ -33,13 +42,6 @@ int switch_24 = 6;
 #define LED_PIN 13  // (Galileo/Arduino is 13)
 bool blinkState = false;
 
-// PID parameters
-float Kp(0), Ki(0), Kd(0);
-float xError(0), xCumulativeError(0), xRateError(0), xLastError(90);
-
-// Reference angle
-#define thetaX_ref 0
-#define thetaU_ref 0
 
 // MPU control/status vars
 bool dmpReady = false;   // set true if DMP init was successful
@@ -54,8 +56,7 @@ VectorFloat gravity;    // [x, y, z]            gravity vector
 Quaternion q;           // [w, x, y, z]         quaternion container
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-float xy[2];           // [x,  y]              x/y/z axis container
-float xy_old[2] {0};  // [x,  y]              x/y/z axis container of previous reading
+float xy[2];           // [x,  y]               x/y axis container
 
 
 
@@ -71,87 +72,82 @@ void dmpDataReady() {
 
 // ================================================================
 // ===                    GYROSCOPE ROUTINE                     ===
+// ===                     INITIALIZATION                       ===
 // ================================================================
 
 void gyro_initialize() {
-// join I2C bus (I2Cdev library doesn't do this automatically)
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-  Wire.begin();
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-  Fastwire::setup(400, true);
-#endif
+  // join I2C bus (I2Cdev library doesn't do this automatically)
+  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+    Wire.begin();
+  #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+    Fastwire::setup(400, true);
+  #endif
 
-  while (!Serial)
-  // initialize device
-  Serial.println(F("Initializing I2C devices..."));
-  mpu.initialize();
+    while (!Serial)
+    // initialize device
+    Serial.println(F("Initializing I2C devices..."));
+    mpu.initialize();
 
-  // verify connection
-  Serial.println(F("Testing device connections..."));
-  Serial.println(F("MPU6050 connection "));
-  Serial.print(mpu.testConnection() ? F("successful") : F("failed"));
+    // verify connection
+    Serial.println(F("Testing device connections..."));
+    Serial.println(F("MPU6050 connection "));
+    Serial.print(mpu.testConnection() ? F("successful") : F("failed"));
 
-  // wait for ready
-  Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-  while (Serial.available() && Serial.read())
-    ;  // empty buffer
+    // wait for ready
+    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
+    while (Serial.available() && Serial.read());  // empty buffer
 
-  // load and configure the DMP
-  Serial.println(F("Initializing DMP..."));
-  devStatus = mpu.dmpInitialize();
+    // load and configure the DMP
+    Serial.println(F("Initializing DMP..."));
+    devStatus = mpu.dmpInitialize();
 
-  // supply your own gyro offsets here, scaled for min sensitivity
-  mpu.setXGyroOffset(43);
-  mpu.setYGyroOffset(16);
-  mpu.setZGyroOffset(18);
-  mpu.setXAccelOffset(-443);   // 1688 factory default for my test chip
-  mpu.setYAccelOffset(-1969);  // 1688 factory default for my test chip
-  mpu.setZAccelOffset(1064);   // 1688 factory default for my test chip
+    // supply your own gyro offsets here, scaled for min sensitivity
+    mpu.setXGyroOffset(43);
+    mpu.setYGyroOffset(16);
+    mpu.setZGyroOffset(18);
+    mpu.setXAccelOffset(-443);
+    mpu.setYAccelOffset(-1969);
+    mpu.setZAccelOffset(1064);
 
-  // make sure it worked (returns 0 if so)
-  if (devStatus == 0) {
-    // turn on the DMP, now that it's ready
-    Serial.println(F("Enabling DMP..."));
-    mpu.setDMPEnabled(true);
+    // make sure it worked (returns 0 if so)
+    if (devStatus == 0) {
+      // turn on the DMP, now that it's ready
+      Serial.println(F("Enabling DMP..."));
+      mpu.setDMPEnabled(true);
 
-    // enable Arduino interrupt detection
-    Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-    attachInterrupt(0, dmpDataReady, RISING);
-    mpuIntStatus = mpu.getIntStatus();
+      // enable Arduino interrupt detection
+      Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+      attachInterrupt(0, dmpDataReady, RISING);
+      mpuIntStatus = mpu.getIntStatus();
 
-    // set our DMP Ready flag so the main loop() function knows it's okay to use it
-    Serial.println(F("DMP ready! Waiting for first interrupt..."));
-    dmpReady = true;
+      // set our DMP Ready flag so the main loop() function knows it's okay to use it
+      Serial.println(F("DMP ready! Waiting for first interrupt..."));
+      dmpReady = true;
 
-    // get expected DMP packet size for later comparison
-    packetSize = mpu.dmpGetFIFOPacketSize();
-  } else {
-    // ERROR!
-    // 1 = initial memory load failed
-    // 2 = DMP configuration updates failed
-    // (if it's going to break, usually the code will be 1)
-    Serial.print(F("DMP Initialization failed (code "));
-    Serial.print(devStatus);
-    Serial.println(F(")"));
+      // get expected DMP packet size for later comparison
+      packetSize = mpu.dmpGetFIFOPacketSize();
+    } else {
+      // ERROR!
+      // 1 = initial memory load failed
+      // 2 = DMP configuration updates failed
+      // (if it's going to break, usually the code will be 1)
+      Serial.print(F("DMP Initialization failed (code "));
+      Serial.print(devStatus);
+      Serial.println(F(")"));
   }
 
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
 }
 
+
+// ================================================================
+// ===                    GYROSCOPE ROUTINE                     ===
+// ===                     READING ROUTINE                      ===
+// ================================================================
 void gyro_read() {
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
-
-    // wait for MPU interrupt or extra packet(s) available
-
-    #ifdef ARDUINO_BOARD
-      delay(10);
-    #endif
-
-    #ifdef GALILEO_BOARD
-      delay(10);
-    #endif
 
   // reset interrupt flag and get INT_STATUS byte
   mpuInterrupt = true;
@@ -186,14 +182,10 @@ void gyro_read() {
       mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
       xy[0] = ypr[2] * 180 / M_PI;
       xy[1] = ypr[1] * 180 / M_PI;
-      Serial.print("xyz\t");
+      Serial.print("xy\t");
       Serial.print(xy[0]);
-      Serial.print(" - ");
-      Serial.print(xy_old[0]);
       Serial.print("\t");
-      Serial.print(xy[1]);
-      Serial.print(" - ");
-      Serial.println(xy_old[1]);
+      Serial.println(xy[1]);
 
         e = -xy[0];
     #endif
@@ -211,15 +203,41 @@ void gyro_read() {
 
 // pin1 - forward control pin
 // pin2 - backward control pin
-void spinForward(float e) {
+void spinForward(float s) {
 
-  e *= 10;
+  if(s>12) {      // If input signal saturate cut to 12V
+    s=12.f;
+  }
+  if (s<=0) {
+    s = 0;
+  }
+
   int PWM;
 
-  PWM = map(e, 0, 900, 0, 255);
+  PWM = map(s*1000, 0, 12*1000, 0, 255);
+
+  Serial.println(PWM);
 
   analogWrite(switch_24, 0);
   analogWrite(switch_13, PWM);
+}
+
+
+void spinBackward(float s) {
+
+  if(s>12) {      // If input signal saturate cut to 12V
+    s=12.f;
+  }
+  if (s>=0) {
+    s = 0;
+  }
+
+  int PWM;
+
+  PWM = map(s*1000, 0, 12*1000, 0, 255);
+
+  analogWrite(switch_13, 0);
+  analogWrite(switch_24, PWM);
 }
 
 
@@ -240,6 +258,15 @@ void setup() {
 
 
 
+// PID parameters
+float Td(1.106), Ti(8.106);
+float Kp(.185), Ki(0.015), Kd(.22);
+float xError(0), xCumulativeError(0), xRateError(0), xLastError(0);
+
+float u_comp (1.9);       // FeedForward compensation of 3V up to a maximum of 12V
+
+float changeTime = millis();
+float currentTime, difference;
 // ================================================================
 // ===                    MAIN PROGRAM LOOP                     ===
 // ================================================================
@@ -248,14 +275,26 @@ void loop() {
 
   gyro_read();
 
+  currentTime = millis();
+  difference = currentTime - changeTime;
+  changeTime = currentTime;
   // Proportional X error
-  xError = xy[0] - thetaX_ref;
+  xError = (thetaX_ref - xy[0]);
   // Cumulative X error
-  xCumulativeError += xError * .001f;
+  xCumulativeError += xError * difference / 1000.f;
   // Rate X error
-  xRateError = (xError - xLastError) / .001f;
+  xRateError = (xError - xLastError) / difference * 1000.f;
 
+  // PID Controller
+  float u_control = Kp * xError + Ki * xCumulativeError + Kd * xRateError;
 
-  xy_old[0] = xy[0];
-  xy_old[1] = xy[1];
+  if (u_control >= 0) {
+    spinForward(u_control);
+  }
+  else {
+    //spinBackward(u_control);
+  }
+
+  xLastError = xError;
+
 }
