@@ -21,6 +21,8 @@ MPU6050 mpu;
 int switch_13 = 5;
 int switch_24 = 6;
 
+uint32_t count(0);
+
 #define MAX_VOLTAGE 12    // DC Motor max voltage allowed
 
 
@@ -182,7 +184,7 @@ void gyro_read() {
       mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
       xy[0] = ypr[2] * 180 / M_PI;
       xy[1] = ypr[1] * 180 / M_PI;
-      Serial.print("xy\t");
+      //Serial.print("xy\t");
       Serial.print(xy[0]);
       Serial.print("\t");
       Serial.println(xy[1]);
@@ -215,20 +217,16 @@ void spinForward(float s) {
   int PWM;
 
   PWM = map(s*1000, 0, 12*1000, 0, 255);
-
-  Serial.println(PWM);
-
   analogWrite(switch_24, 0);
   analogWrite(switch_13, PWM);
 }
-
 
 void spinBackward(float s) {
 
   if(s>12) {      // If input signal saturate cut to 12V
     s=12.f;
   }
-  if (s>=0) {
+  if (s<=0) {
     s = 0;
   }
 
@@ -259,11 +257,11 @@ void setup() {
 
 
 // PID parameters
-float Td(1.106), Ti(8.106);
-float Kp(.185), Ki(0.015), Kd(.22);
+//float Kp(6);//, Ki(0.1053), Kd(.9439);
+float Kp(10.9474), Ki(23.2923), Kd(5.753); // 21.2923 //5.753
 float xError(0), xCumulativeError(0), xRateError(0), xLastError(0);
 
-float u_comp (1.9);       // FeedForward compensation of 3V up to a maximum of 12V
+float u_comp (4.5);       // FeedForward compensation of 3V up to a maximum of 12V
 
 float changeTime = millis();
 float currentTime, difference;
@@ -279,20 +277,42 @@ void loop() {
   difference = currentTime - changeTime;
   changeTime = currentTime;
   // Proportional X error
-  xError = (thetaX_ref - xy[0]);
+  xError = (thetaX_ref - xy[0]) * deg2rad;
   // Cumulative X error
   xCumulativeError += xError * difference / 1000.f;
   // Rate X error
   xRateError = (xError - xLastError) / difference * 1000.f;
 
   // PID Controller
-  float u_control = Kp * xError + Ki * xCumulativeError + Kd * xRateError;
+  float u_control = Kp * xError + Ki * xCumulativeError + Kd * xRateError + u_comp;
 
   if (u_control >= 0) {
     spinForward(u_control);
   }
   else {
-    //spinBackward(u_control);
+    spinBackward(-u_control);
+  }
+
+  xLastError = xError;
+
+  currentTime = millis();
+  difference = currentTime - changeTime;
+  changeTime = currentTime;
+  // Proportional X error
+  xError = (thetaX_ref - xy[0]) * deg2rad;
+  // Cumulative X error
+  xCumulativeError += xError * difference / 1000.f;
+  // Rate X error
+  xRateError = (xError - xLastError) / difference * 1000.f;
+
+  // PID Controller
+  float u_control = Kp * xError + Ki * xCumulativeError + Kd * xRateError + u_comp;
+
+  if (u_control >= 0) {
+    spinForward(u_control);
+  }
+  else {
+    spinBackward(-u_control);
   }
 
   xLastError = xError;
